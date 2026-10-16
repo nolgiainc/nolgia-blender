@@ -1,0 +1,54 @@
+name: Release
+
+# Push a tag blender-v<version> (the version in blender_manifest.toml) and this
+# builds nolgia-blender-<version>.zip with Blender 4.2 LTS, validates it and
+# attaches it to a draft release of that tag. Publish the draft by hand after
+# reading it; the website links to the file by that exact name. A file that is
+# already on the release is never replaced.
+
+on:
+  push:
+    tags: ["blender-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Build and attach the zip
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Get Blender
+        run: .github/get-blender.sh
+      - name: Build and validate
+        run: |
+          version="${GITHUB_REF_NAME#blender-v}"
+          manifest=$(sed -nE 's/^version = "([^"]+)"$/\1/p' blender_manifest.toml)
+          if [ "$version" != "$manifest" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match blender_manifest.toml version $manifest"
+            exit 1
+          fi
+          out="$RUNNER_TEMP/dist/nolgia-blender-$version.zip"
+          mkdir -p "$RUNNER_TEMP/dist"
+          "$BLENDER" --command extension build --source-dir . --output-filepath "$out"
+          "$BLENDER" --command extension validate "$out"
+          echo "OUT=$out" >> "$GITHUB_ENV"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$OUT"
+          else
+            gh release create "$GITHUB_REF_NAME" "$OUT" --draft --verify-tag \
+              --title "NOLGIA for Blender $VERSION" \
+              --notes "NOLGIA for Blender $VERSION (Blender 4.2 or later). Install: Edit > Preferences > Get Extensions > Install from Disk, then pick nolgia-blender-$VERSION.zip. See the README."
+          fi

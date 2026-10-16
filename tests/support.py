@@ -9,7 +9,7 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXT_DIR = os.path.dirname(HERE)
-REPO = os.path.dirname(EXT_DIR)
+REPO = EXT_DIR  # the extension is the repository's root
 for path in (EXT_DIR, os.path.join(REPO, "tools")):
     if path not in sys.path:
         sys.path.insert(0, path)
