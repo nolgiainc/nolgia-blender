@@ -16,7 +16,7 @@
    "Ask before running code" on, and stops when the token is refused.
 
 Usage:
-    python3 blender/tests/e2e_blender.py --blender /path/to/blender[.exe]
+    python3 tests/e2e_blender.py --blender /path/to/blender[.exe]
 
 Works from WSL with a Windows blender.exe: paths are translated with wslpath
 and variables passed through WSLENV. BLENDER env var works instead of
@@ -39,7 +39,7 @@ import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXT_DIR = os.path.dirname(HERE)
-REPO = os.path.dirname(EXT_DIR)
+REPO = EXT_DIR  # the extension is the repository's root
 sys.path.insert(0, os.path.join(REPO, "tools"))
 sys.path.insert(0, EXT_DIR)
 

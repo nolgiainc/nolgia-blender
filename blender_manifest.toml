@@ -24,5 +24,8 @@ paths_exclude_pattern = [
   "/.*",
   "/tests/",
   "/dist/",
+  "/presets/",
+  "/tools/",
+  "/README.md",
   "*.pyc",
 ]
