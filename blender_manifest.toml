@@ -1,9 +1,9 @@
 schema_version = "1.0.0"
 
 id = "nolgia"
-version = "0.1.1"
+version = "0.2.0"
 name = "NOLGIA"
-tagline = "Let your NOLGIA agent work in this Blender scene"
+tagline = "Let NOLGIA Agent work in this Blender scene"
 maintainer = "NOLGIA Inc"
 type = "add-on"
 website = "https://nolgia.ai/plugins/blender"

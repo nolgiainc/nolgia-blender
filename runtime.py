@@ -23,6 +23,7 @@ from . import ops
 from .core import PLUGIN_VERSION
 from .core.api import ApiClient, base_url_from_env
 from .core.auth import DeviceLogin, LoginCancelled, LoginError
+from .core.chat import AgentChat, ChatStore, Link
 from .core.commands import ActivityLog, CommandError
 from .core.instance import lease_instance_id
 from .core.mainthread import MainThreadExecutor
@@ -75,6 +76,15 @@ class Controller:
         self._last_snapshot = 0.0
         self._popup_shown = set()
         self.clean_exit = True
+        self.chat = AgentChat(self)
+
+    # The chat calls these from its own thread.
+
+    def log(self, message):
+        log(message)
+
+    def auth_failed(self, text):
+        self.events.put(lambda: self._auth_failed(text))
 
     # ---------------------------------------------------------- settings
 
@@ -202,9 +212,49 @@ class Controller:
         self.clean_exit = True
         if not self.account_email():
             self._fetch_email(api)
+        self._begin_chat(token, user_dir)
         log("Connecting to %s as instance %s." % (api.base_url, self.lease.instance_id))
         self.bump()
         return True
+
+    def _begin_chat(self, token, user_dir):
+        """The chat talks to NOLGIA with this sign in, pinned to this
+        install's instance id (the one the bridge session uses)."""
+        if bpy.app.background or self.lease is None:
+            return
+        api = ApiClient(
+            base_url_from_env(),
+            token,
+            user_agent="nolgia-blender/%s (Blender %s; chat)" % (PLUGIN_VERSION, ops.app_version()),
+        )
+        self.chat.begin(Link(api, self.lease.instance_id, api.base_url, self.account_email(),
+                             ChatStore(os.path.join(user_dir, "chat.json"))))
+
+    def chat_blocker(self):
+        """Why the chat cannot send right now, with the one click that fixes
+        it, or None. NOLGIA Agent reaches this Blender only while it is
+        connected and Allow NOLGIA Agent is on."""
+        if not self.signed_in:
+            return None
+        if not self.connected:
+            return {"kind": "connect", "label": "Turn on Connected",
+                    "text": "Turn on Connected so NOLGIA Agent can work in this Blender."}
+        prefs = self.prefs()
+        if prefs is not None and not prefs.allow_agent:
+            return {"kind": "allow_agent", "label": "Allow NOLGIA Agent",
+                    "text": "NOLGIA Agent can work here only while Allow NOLGIA Agent is on."}
+        return None
+
+    def fix_chat_blocker(self):
+        blocker = self.chat_blocker()
+        prefs = self.prefs()
+        if blocker is None or prefs is None:
+            return
+        if blocker["kind"] == "connect":
+            prefs.connected = True  # its update starts the connection
+        elif blocker["kind"] == "allow_agent":
+            prefs.allow_agent = True
+        self.bump()
 
     def account_email(self):
         if self.env_token:
@@ -260,6 +310,7 @@ class Controller:
     def _auth_failed(self, text):
         self.message = text
         self.clean_exit = False
+        self.chat.reset(forget=False)
         if self.env_token:
             self.env_token = None
         else:
@@ -336,6 +387,7 @@ class Controller:
     def sign_out(self):
         self.cancel_sign_in()
         self.disconnect("You signed out of NOLGIA in Blender before this ran.")
+        self.chat.reset()
         self.env_token = None
         self.set_pref("token", "")
         self.set_pref("account_email", "")
@@ -424,6 +476,10 @@ class Controller:
                 traceback.print_exc()
         if self.executor.pump():
             self.bump()
+        restore = self.chat.take_restore()
+        if restore:
+            _restore_chat_input(restore)
+            self.bump()
         if self.worker is not None:
             if time.monotonic() - self._last_snapshot > 1.0:
                 self.update_snapshot()
@@ -456,6 +512,7 @@ class Controller:
 
     def shutdown(self, wait=0.0):
         self.cancel_sign_in()
+        self.chat.close()
         worker = self.worker
         if worker is not None:
             self.executor.close("Blender is closing.")
@@ -476,6 +533,14 @@ def _mark_prefs_dirty():
         bpy.context.preferences.is_dirty = True
     except Exception:
         pass
+
+
+def _restore_chat_input(text):
+    """A send NOLGIA refused: put the text back in the box, unless the
+    person typed something new meanwhile."""
+    wm = getattr(bpy.context, "window_manager", None)
+    if wm is not None and hasattr(wm, "nolgia_chat_input") and not wm.nolgia_chat_input:
+        wm.nolgia_chat_input = text
 
 
 def _redraw():
