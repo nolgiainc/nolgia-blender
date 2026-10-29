@@ -1,9 +1,11 @@
 # NOLGIA for Blender
 
 NOLGIA's plugin for Blender. It connects Blender on your computer to
-NOLGIA, so your agent (Claude, Cursor, the NOLGIA Agent and others, through
-NOLGIA's MCP server) can look at your project, make changes in it, render
-previews and move files between the app and your NOLGIA library.
+NOLGIA, so NOLGIA Agent can look at your scene, make changes in it, render
+previews and move files between Blender and your NOLGIA library. Tell it what
+you want right in the NOLGIA tab, so you never need to leave NOLGIA. You can
+also use Claude, Cursor, Codex or another agent with NOLGIA connected
+(through NOLGIA's MCP server).
 
 ```
 your agent --MCP--> mcp.nolgia.ai --> api.nolgia.ai <--(the plugin connects out)-- Blender on your computer
@@ -26,15 +28,36 @@ on, and it lists every command it runs.
 3. In the 3D Viewport, press N and open the NOLGIA tab.
 4. Click Sign in. Your browser opens a NOLGIA page; check that the code
    matches the one in Blender and approve it.
-5. Keep Connected on and ask your agent to work in Blender. Each command shows
-   up in the Activity list. Click Pause (or turn Connected off) to stop at any
-   time.
+5. Keep Connected on and tell NOLGIA Agent what to do in the box under
+   NOLGIA Agent, then click Send. Each command it runs here shows up in the
+   Activity list. Click Pause (or turn Connected off) to stop at any time.
+
+### The chat with NOLGIA Agent
+
+The NOLGIA Agent part of the tab is a chat with your NOLGIA Agent, which
+works in this Blender through the plugin:
+
+- Type what you want in the box and click Send. Before your first message it
+  suggests a few things to try (a click puts one in the box).
+- One message is one turn: while NOLGIA Agent works, the box waits and Stop
+  ends the turn. What it does in Blender shows in Activity.
+- Each reply shows what its turn cost. The line under the box gives the rate
+  of your NOLGIA Agent's model ("each turn from 70 credits on your model").
+- The chat is the same chat as on [nolgia.ai/agent](https://nolgia.ai/agent)
+  ("Open this chat on nolgia.ai"), named "Blender: " and your first words.
+  This Blender remembers it; New chat starts another. It is pinned to this
+  Blender, so NOLGIA Agent knows the work is in this window.
+- The chat needs Connected and Allow NOLGIA Agent on; the tab offers the one
+  click that switches on whichever is off.
+- The tab shows the last three turns; the whole chat is on nolgia.ai. The
+  sidebar scrolls (mouse wheel), and Settings and Activity fold away by their
+  headers. Activity shows the newest six commands, or all of them.
 
 Settings in the NOLGIA tab (also in the add-on's preferences):
 
 - **Connected**: NOLGIA can send commands to this Blender only while this is on.
-- **Allow NOLGIA Agent**: also let your NOLGIA Agent in the cloud work here, not
-  only the agent apps you run yourself.
+- **Allow NOLGIA Agent**: let NOLGIA Agent work here (the chat needs it), as
+  well as the agent apps you run yourself.
 - **Ask before running code**: show every piece of Python NOLGIA wants to run
   and wait for you to click Approve or Deny.
 - **Sign out**: disconnect and forget the sign in on this computer.
@@ -42,6 +65,12 @@ Settings in the NOLGIA tab (also in the add-on's preferences):
 Python that NOLGIA runs in Blender runs on your computer with your
 permissions, like any add-on or script. Turn on Ask before running code if you
 want to see it first.
+
+## Tested on
+
+0.2.0 (the chat) was tested on Windows 11 with Blender 4.5.8 LTS, against the
+mock API and against NOLGIA itself. It has not been run on macOS yet. 0.1.1 was
+tested on Windows and macOS.
 
 ## What your agent can do
 
@@ -104,8 +133,8 @@ with the zip attached as `nolgia-blender-<version>.zip`; the website links to
 that exact name.
 
 ```sh
-blender --command extension build --source-dir . --output-filepath dist/nolgia-blender-0.1.1.zip
-blender --command extension validate dist/nolgia-blender-0.1.1.zip
+blender --command extension build --source-dir . --output-filepath dist/nolgia-blender-0.2.0.zip
+blender --command extension validate dist/nolgia-blender-0.2.0.zip
 ```
 
 Run the mock API on its own:
@@ -122,7 +151,7 @@ The wire format is the NOLGIA API's `/bridge/*` endpoints (`api/openapi.yaml`,
 | Path | What it holds |
 |---|---|
 | [`__init__.py`](__init__.py), [`ui.py`](ui.py), [`ops.py`](ops.py), [`runtime.py`](runtime.py), [`blender_manifest.toml`](blender_manifest.toml) | The Blender extension (this folder is the extension: `blender --command extension build --source-dir .`) |
-| [`core/`](core/) | The parts that do not need Blender (protocol client, sign in, commands); NOLGIA for DaVinci Resolve keeps a copy of it |
+| [`core/`](core/) | The parts that do not need Blender (protocol client, sign in, commands, the chat); NOLGIA for DaVinci Resolve keeps a copy of it |
 | [`tests/`](tests/) | Unit tests and the end-to-end test |
 | [`presets/blender/`](presets/blender/) | The Film assistant workflows for Blender and the rules they share |
 | [`tools/mock_bridge_server.py`](tools/mock_bridge_server.py) | An in-memory mock of the NOLGIA API that the tests run against |

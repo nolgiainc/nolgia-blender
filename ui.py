@@ -5,12 +5,24 @@
 import time
 
 import bpy
-from bpy.props import BoolProperty, FloatProperty, StringProperty
+from bpy.props import BoolProperty, FloatProperty, IntProperty, StringProperty
 
 from . import runtime
+from .core import AGENT_URL
 
 PACKAGE = __package__
 MAX_CODE_LINES = 30
+ACTIVITY_SHOWN = 6
+LINKS_SHOWN = 3
+
+# What the chat suggests before the first message: things NOLGIA Agent does
+# in Blender through this plugin. The button shows the short name; a click
+# puts the whole ask in the box.
+EXAMPLES = (
+    ("Low poly mountains", "Add a low poly mountain scene with a camera and a sun."),
+    ("Preview this scene", "Render a preview of this scene from the active camera and tell me what you see."),
+    ("Bring in my newest image", "Bring my newest NOLGIA image into this scene as a plane."),
+)
 
 STATUS_ICONS = {
     "received": "TIME",
@@ -57,8 +69,8 @@ class NOLGIA_Preferences(bpy.types.AddonPreferences):
     )
     allow_agent: BoolProperty(
         name="Allow NOLGIA Agent",
-        description="Let your NOLGIA Agent in the cloud work here too, not only the agent apps "
-        "you run yourself (Claude, Cursor and others)",
+        description="Let NOLGIA Agent work here (the chat in this tab needs it), as well as agents "
+        "you run yourself, like Claude, Cursor or Codex",
         default=True,
         update=_on_allow_agent,
     )
@@ -73,14 +85,25 @@ class NOLGIA_Preferences(bpy.types.AddonPreferences):
 
 
 def draw_nolgia(layout, context, in_prefs=False):
+    """The whole NOLGIA panel in the add-on's preferences. The sidebar draws
+    the same parts in sub-panels, with the chat (draw_status, draw_chat,
+    draw_settings, draw_activity)."""
     ctl = _ctl()
     prefs = ctl.prefs() if ctl is not None else None
     if ctl is None or prefs is None:
         layout.label(text="NOLGIA is loading...")
         return
+    draw_status(layout, context, ctl)
+    if ctl.login is None and ctl.signed_in:
+        draw_settings(layout, context, ctl, prefs)
+    draw_activity(layout, context, ctl, prefs, box=True)
+    if in_prefs:
+        layout.label(text="NOLGIA works in this Blender only while Connected is on.")
 
-    col = layout.column(align=True)
-    col.label(text=ctl.status_line(), icon=_status_icon(ctl))
+
+def draw_status(layout, context, ctl):
+    """The status line, signing in, and requests waiting for approval."""
+    _wrapped(layout, ctl.status_line(), context, icon=_status_icon(ctl))
 
     if ctl.login is not None:
         box = layout.box()
@@ -99,17 +122,6 @@ def draw_nolgia(layout, context, in_prefs=False):
         row = layout.row()
         row.scale_y = 1.4
         row.operator("nolgia.sign_in", icon="USER")
-    else:
-        email = ctl.account_email()
-        if email:
-            layout.label(text="Signed in as %s" % email)
-        elif ctl.env_token:
-            layout.label(text="Signed in with NOLGIA_TOKEN")
-        col = layout.column()
-        col.prop(prefs, "connected")
-        col.prop(prefs, "allow_agent")
-        col.prop(prefs, "ask_before_run")
-        layout.operator("nolgia.sign_out", icon="X")
 
     for pending in list(ctl.executor.approvals):
         box = layout.box()
@@ -123,24 +135,222 @@ def draw_nolgia(layout, context, in_prefs=False):
         approve.command_id = pending.id
         row.operator("nolgia.deny", text="Deny", icon="CANCEL").command_id = pending.id
 
-    items = ctl.activity.items()
-    box = layout.box()
-    header = box.row()
-    header.label(text="Activity", icon="SORTTIME")
+
+def draw_settings(layout, context, ctl, prefs):
+    email = ctl.account_email()
+    if email:
+        layout.label(text="Signed in as %s" % email)
+    elif ctl.env_token:
+        layout.label(text="Signed in with NOLGIA_TOKEN")
+    col = layout.column()
+    col.prop(prefs, "connected")
+    col.prop(prefs, "allow_agent")
+    col.prop(prefs, "ask_before_run")
+    layout.operator("nolgia.sign_out", icon="X")
+
+
+def draw_pause(layout, ctl, prefs):
     if ctl.signed_in:
         paused = not prefs.connected
-        header.operator("nolgia.pause", text="Resume" if paused else "Pause",
+        layout.operator("nolgia.pause", text="Resume" if paused else "Pause",
                         icon="PLAY" if paused else "PAUSE")
+
+
+def draw_activity(layout, context, ctl, prefs, box=False):
+    """The commands NOLGIA ran here, newest first: the newest few, or all
+    of them (at most 20) when the person asks."""
+    items = ctl.activity.items()
+    if box:
+        layout = layout.box()
+        header = layout.row()
+        header.label(text="Activity", icon="SORTTIME")
+        draw_pause(header, ctl, prefs)
     if not items:
-        box.label(text="Nothing yet.")
-    for item in items:
-        row = box.row(align=True)
+        layout.label(text="Nothing yet.")
+    wm = context.window_manager
+    show_all = bool(getattr(wm, "nolgia_activity_all", False))
+    for item in items if show_all else items[:ACTIVITY_SHOWN]:
+        row = layout.row(align=True)
         row.label(text=time.strftime("%H:%M:%S", time.localtime(item["time"])))
         row.label(text=item["kind"])
         label = runtime.ActivityLog.STATUS_LABELS.get(item["status"], item["status"])
         row.label(text=label, icon=STATUS_ICONS.get(item["status"], "DOT"))
-    if in_prefs:
-        layout.label(text="NOLGIA works in this Blender only while Connected is on.")
+    if len(items) > ACTIVITY_SHOWN and hasattr(wm, "nolgia_activity_all"):
+        layout.prop(wm, "nolgia_activity_all", toggle=True,
+                    text="Show fewer" if show_all else "Show all %d" % len(items),
+                    icon="TRIA_UP" if show_all else "TRIA_DOWN")
+
+
+# ------------------------------------------------------------------- the chat
+
+
+def _width(context, inset=40):
+    """How many pixels of text fit on one line of the sidebar, inside
+    `inset` (unscaled) pixels of margins."""
+    region = getattr(context, "region", None)
+    width = region.width if region is not None else 300
+    return max(80, width - inset * _scale(context))
+
+
+def _scale(context):
+    try:
+        return context.preferences.system.ui_scale
+    except AttributeError:
+        return 1.0
+
+
+def _measure(context):
+    """A function giving a text's width in pixels at the panel's font size."""
+    try:
+        import blf
+
+        points = context.preferences.ui_styles[0].widget.points
+        blf.size(0, points * _scale(context))
+        if blf.dimensions(0, "NOLGIA")[0] <= 0:
+            raise ValueError("no font")
+        # Labels draw with a little padding and their own kerning: keep a margin.
+        return lambda text: blf.dimensions(0, text)[0] * 1.1
+    except Exception:  # no window (tests, background): about 6 pixels a character
+        scale = _scale(context)
+        return lambda text: len(text) * 6.2 * scale
+
+
+def _wrap(text, width, measure, indent=""):
+    """Break text into lines no wider than `width` pixels."""
+    lines = []
+    for paragraph in str(text or "").split("\n"):
+        line = ""
+        for word in paragraph.split():
+            candidate = word if not line else line + " " + word
+            if line and measure(candidate) > width:
+                lines.append(line)
+                line = indent + word
+            else:
+                line = candidate
+            while measure(line) > width and len(line) > len(indent) + 1:  # one very long word
+                cut = len(line)
+                while cut > len(indent) + 1 and measure(line[:cut]) > width:
+                    cut -= 1
+                lines.append(line[:cut])
+                line = indent + line[cut:]
+        lines.append(line)
+    return lines
+
+
+def _wrapped(layout, text, context, inset=40, icon=None, indent=""):
+    """Text as labels, broken to the sidebar's width (Blender labels do not
+    wrap). A first line with an icon keeps the rest lined up with it."""
+    col = layout.column(align=True)
+    width = _width(context, inset + (22 if icon else 0))
+    for i, line in enumerate(_wrap(text, width, _measure(context), indent)):
+        if icon:
+            col.label(text=line, icon=icon if i == 0 else "BLANK1")
+        else:
+            col.label(text=line)
+    return col
+
+
+def _parts_text(parts):
+    return "".join(p["text"] for p in parts)
+
+
+def _faint(layout):
+    row = layout.row()
+    row.enabled = False
+    return row
+
+
+def draw_message(layout, context, row):
+    box = layout.box()
+    inset = 64
+    if row["role"] == "user":
+        _faint(box).label(text="BACKGROUND WORK FINISHED" if row["background"] else "YOU")
+        _wrapped(box, row["text"], context, inset)
+        return
+    _faint(box).label(text="NOLGIA AGENT")
+    if row["status"] == "pending":
+        box.label(text="Waiting for a free turn..." if row["queued"] else "Working...", icon="TIME")
+        return
+    links = []
+    for block in row["blocks"] or []:
+        text = _parts_text(block["parts"])
+        if block["type"] == "li":
+            _wrapped(box, "\u2022 " + text, context, inset, indent="   ")
+        else:
+            _wrapped(box, text, context, inset)
+        for p in block["parts"]:
+            if p.get("href") and p["href"] not in [href for _, href in links]:
+                links.append((p["text"], p["href"]))
+    for text, href in links[:LINKS_SHOWN]:
+        box.operator("wm.url_open", text=text, icon="URL").url = href
+    if row["failure"]:
+        sub = box.column()
+        sub.alert = True
+        _wrapped(sub, row["failure"], context, inset, icon="ERROR")
+    question = row["question"]
+    if question and question.get("options"):
+        col = box.column(align=True)
+        for option in question["options"]:
+            label = str(option.get("label") or "")
+            if label:
+                col.operator("nolgia.chat_answer", text=label).text = label
+    if row["credits"] is not None and row["status"] == "complete":
+        _faint(box).label(text="%s credits" % _number(row["credits"]))
+
+
+def _number(value):
+    return str(int(value)) if float(value).is_integer() else str(value)
+
+
+def draw_chat(layout, context, ctl):
+    chat = ctl.chat
+    view = chat.view()
+    blocker = ctl.chat_blocker()
+    wm = context.window_manager
+
+    if view["loaded"] and view["empty"]:
+        _wrapped(layout, "Tell NOLGIA Agent what to do in this Blender. Try one of these:", context)
+        col = layout.column(align=True)
+        for i, (label, _ask) in enumerate(EXAMPLES):
+            col.operator("nolgia.chat_example", text=label, icon="FORWARD").index = i
+        layout.operator("wm.url_open", text="Open NOLGIA Agent", icon="URL").url = AGENT_URL
+
+    if view["hidden"]:
+        _faint(layout).label(text="Earlier messages are on nolgia.ai.")
+    for row in view["rows"]:
+        draw_message(layout, context, row)
+
+    if view["working"]:
+        _wrapped(layout, view["working"], context, icon="TIME")
+    notice = view["notice"]
+    if notice:
+        box = layout.box()
+        sub = box.column()
+        sub.alert = notice["kind"] in ("error", "credits", "network")
+        _wrapped(sub, notice["text"], context, 52, icon="ERROR" if sub.alert else "INFO")
+        if notice.get("action"):
+            box.operator("wm.url_open", text=notice["action"]["label"], icon="URL").url = notice["action"]["url"]
+    if blocker:
+        box = layout.box()
+        _wrapped(box, blocker["text"], context, 52, icon="INFO")
+        box.operator("nolgia.chat_fix", text=blocker["label"])
+
+    col = layout.column()
+    col.enabled = not view["busy"] and blocker is None
+    try:
+        col.prop(wm, "nolgia_chat_input", text="", placeholder="Ask NOLGIA Agent to make or change something here")
+    except TypeError:  # no placeholder before Blender 4.1
+        col.prop(wm, "nolgia_chat_input", text="")
+    row = layout.row(align=True)
+    if view["can_stop"]:
+        row.operator("nolgia.chat_stop", text="Stop", icon="CANCEL")
+    send = row.row(align=True)
+    send.enabled = not view["busy"] and blocker is None
+    send.scale_y = 1.3
+    send.operator("nolgia.chat_send", text="Send", icon="EXPORT")
+    _wrapped(_faint(layout).column(), view["cost_line"], context)
+    if view["session_url"]:
+        layout.operator("wm.url_open", text="Open this chat on nolgia.ai", icon="URL").url = view["session_url"]
 
 
 def _status_icon(ctl):
@@ -164,7 +374,152 @@ class VIEW3D_PT_nolgia(bpy.types.Panel):
     bl_label = "NOLGIA"
 
     def draw(self, context):
-        draw_nolgia(self.layout, context)
+        ctl = _ctl()
+        if ctl is None or ctl.prefs() is None:
+            self.layout.label(text="NOLGIA is loading...")
+            return
+        draw_status(self.layout, context, ctl)
+
+
+def _signed_in_here():
+    ctl = _ctl()
+    return ctl is not None and ctl.prefs() is not None and ctl.signed_in and ctl.login is None
+
+
+class VIEW3D_PT_nolgia_agent(bpy.types.Panel):
+    """The chat with NOLGIA Agent. The sidebar scrolls (mouse wheel), and
+    every part below can be folded away by its header."""
+
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "NOLGIA"
+    bl_label = "NOLGIA Agent"
+    bl_parent_id = "VIEW3D_PT_nolgia"
+
+    @classmethod
+    def poll(cls, context):
+        return _signed_in_here()
+
+    def draw_header_preset(self, context):
+        if not _ctl().chat.view()["empty"]:
+            self.layout.operator("nolgia.chat_new", text="New chat", icon="ADD")
+
+    def draw(self, context):
+        draw_chat(self.layout, context, _ctl())
+
+
+class VIEW3D_PT_nolgia_settings(bpy.types.Panel):
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "NOLGIA"
+    bl_label = "Settings"
+    bl_parent_id = "VIEW3D_PT_nolgia"
+
+    @classmethod
+    def poll(cls, context):
+        return _signed_in_here()
+
+    def draw(self, context):
+        ctl = _ctl()
+        draw_settings(self.layout, context, ctl, ctl.prefs())
+
+
+class VIEW3D_PT_nolgia_activity(bpy.types.Panel):
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "NOLGIA"
+    bl_label = "Activity"
+    bl_parent_id = "VIEW3D_PT_nolgia"
+
+    @classmethod
+    def poll(cls, context):
+        ctl = _ctl()
+        return ctl is not None and ctl.prefs() is not None
+
+    def draw_header_preset(self, context):
+        ctl = _ctl()
+        draw_pause(self.layout, ctl, ctl.prefs())
+
+    def draw(self, context):
+        ctl = _ctl()
+        draw_activity(self.layout, context, ctl, ctl.prefs())
+
+
+class NOLGIA_OT_chat_send(bpy.types.Operator):
+    bl_idname = "nolgia.chat_send"
+    bl_label = "Send"
+    bl_description = "Send this to NOLGIA Agent, which works in this Blender"
+
+    def execute(self, context):
+        ctl = _ctl()
+        wm = context.window_manager
+        if ctl is None or ctl.chat_blocker() is not None:
+            return {"CANCELLED"}
+        if ctl.chat.send(wm.nolgia_chat_input):
+            wm.nolgia_chat_input = ""
+            return {"FINISHED"}
+        return {"CANCELLED"}
+
+
+class NOLGIA_OT_chat_answer(bpy.types.Operator):
+    bl_idname = "nolgia.chat_answer"
+    bl_label = "Answer"
+    bl_description = "Send this answer to NOLGIA Agent"
+    bl_options = {"INTERNAL"}
+
+    text: StringProperty(options={"HIDDEN", "SKIP_SAVE"})
+
+    def execute(self, context):
+        ctl = _ctl()
+        if ctl is None or ctl.chat_blocker() is not None or not ctl.chat.send(self.text):
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+class NOLGIA_OT_chat_example(bpy.types.Operator):
+    bl_idname = "nolgia.chat_example"
+    bl_label = "Try this"
+    bl_options = {"INTERNAL"}
+
+    index: IntProperty(options={"HIDDEN", "SKIP_SAVE"})
+
+    @classmethod
+    def description(cls, context, properties):
+        return "Put this in the box: " + EXAMPLES[properties.index % len(EXAMPLES)][1]
+
+    def execute(self, context):
+        context.window_manager.nolgia_chat_input = EXAMPLES[self.index % len(EXAMPLES)][1]
+        return {"FINISHED"}
+
+
+class NOLGIA_OT_chat_stop(bpy.types.Operator):
+    bl_idname = "nolgia.chat_stop"
+    bl_label = "Stop"
+    bl_description = "Stop what NOLGIA Agent is doing (generations it already started keep running)"
+
+    def execute(self, context):
+        _ctl().chat.stop()
+        return {"FINISHED"}
+
+
+class NOLGIA_OT_chat_new(bpy.types.Operator):
+    bl_idname = "nolgia.chat_new"
+    bl_label = "New chat"
+    bl_description = "Start a new chat with NOLGIA Agent (this one stays on nolgia.ai)"
+
+    def execute(self, context):
+        _ctl().chat.new_chat()
+        return {"FINISHED"}
+
+
+class NOLGIA_OT_chat_fix(bpy.types.Operator):
+    bl_idname = "nolgia.chat_fix"
+    bl_label = "Fix"
+    bl_description = "Switch on what NOLGIA Agent needs to work in this Blender"
+
+    def execute(self, context):
+        _ctl().fix_chat_blocker()
+        return {"FINISHED"}
 
 
 class NOLGIA_OT_sign_in(bpy.types.Operator):
@@ -314,6 +669,15 @@ class NOLGIA_OT_review_request(bpy.types.Operator):
 CLASSES = (
     NOLGIA_Preferences,
     VIEW3D_PT_nolgia,
+    VIEW3D_PT_nolgia_agent,
+    VIEW3D_PT_nolgia_settings,
+    VIEW3D_PT_nolgia_activity,
+    NOLGIA_OT_chat_send,
+    NOLGIA_OT_chat_answer,
+    NOLGIA_OT_chat_example,
+    NOLGIA_OT_chat_stop,
+    NOLGIA_OT_chat_new,
+    NOLGIA_OT_chat_fix,
     NOLGIA_OT_sign_in,
     NOLGIA_OT_cancel_sign_in,
     NOLGIA_OT_open_sign_in_page,
@@ -326,11 +690,29 @@ CLASSES = (
 )
 
 
+def _on_chat_input(wm, _context):
+    ctl = _ctl()
+    if ctl is not None:
+        ctl.chat.wake()
+
+
 def register():
     for cls in CLASSES:
         bpy.utils.register_class(cls)
+    bpy.types.WindowManager.nolgia_chat_input = StringProperty(
+        name="Message",
+        description="Ask NOLGIA Agent to make or change something in this Blender",
+        options={"SKIP_SAVE"},
+        update=_on_chat_input,
+    )
+    bpy.types.WindowManager.nolgia_activity_all = BoolProperty(
+        name="Show all activity", description="Show every command NOLGIA ran here (the last 20)", default=False,
+    )
 
 
 def unregister():
+    for name in ("nolgia_chat_input", "nolgia_activity_all"):
+        if hasattr(bpy.types.WindowManager, name):
+            delattr(bpy.types.WindowManager, name)
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
