@@ -14,6 +14,7 @@ from core import PLUGIN_VERSION
 from core.api import ApiClient
 from core.commands import CAPABILITIES, ActivityLog
 from core.mainthread import MainThreadExecutor
+from core import util
 from core import worker as worker_module
 from core.worker import BridgeWorker, Status
 
@@ -86,11 +87,35 @@ class WorkerTest(unittest.TestCase):
     def test_registers_with_the_spec_body(self):
         self.start()
         body = self.server.state.heartbeats[-1]["body"]
-        self.assertEqual(body, {
+        expected = {
             "instance_id": "inst-test", "app": "blender", "app_version": "4.5.8",
             "plugin_version": PLUGIN_VERSION, "machine_name": "test-box",
             "document": {"name": ""}, "capabilities": list(CAPABILITIES), "allow_agent": True,
-        })
+        }
+        if util.os_name():
+            expected["os"] = util.os_name()
+        self.assertEqual(body, expected)
+        self.assertEqual(self.live_sessions()[0].get("os"), util.os_name() or None)
+
+    def test_an_api_without_the_os_field_still_connects(self):
+        # An API from before sessions carried the OS refuses the field as
+        # unknown; the plugin then stops sending it instead of failing.
+        self.server.state.bridge_os = False
+        h = self.start()
+        body = self.server.state.heartbeats[-1]["body"]
+        self.assertNotIn("os", body)
+        self.assertEqual(h.worker.state, Status.CONNECTED)
+
+    def test_a_name_looked_up_is_kept_for_photoshop(self):
+        with mock.patch.object(worker_module, "computer_name", return_value="Ada's MacBook Pro"), \
+                mock.patch.object(worker_module, "remember_computer_name") as remember:
+            w = BridgeWorker(ApiClient(self.server.base_url, support.TOKEN), None, ActivityLog(), "inst-x", lambda: {})
+            self.assertEqual(w.machine_name, "Ada's MacBook Pro")
+            w._set_status = lambda state, text: None
+            with mock.patch.object(threading, "Thread"):
+                w.start()
+        remember.assert_called_once()
+        self.assertEqual(remember.call_args[0][0], "Ada's MacBook Pro")
 
     def test_fields_are_kept_within_the_api_limits(self):
         h = Harness(self.server.base_url)

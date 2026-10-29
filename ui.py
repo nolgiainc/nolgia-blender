@@ -456,7 +456,7 @@ class NOLGIA_OT_chat_send(bpy.types.Operator):
         if ctl is None or ctl.chat_blocker() is not None:
             return {"CANCELLED"}
         if ctl.chat.send(wm.nolgia_chat_input):
-            wm.nolgia_chat_input = ""
+            set_chat_input(wm, "")
             return {"FINISHED"}
         return {"CANCELLED"}
 
@@ -488,7 +488,7 @@ class NOLGIA_OT_chat_example(bpy.types.Operator):
         return "Put this in the box: " + EXAMPLES[properties.index % len(EXAMPLES)][1]
 
     def execute(self, context):
-        context.window_manager.nolgia_chat_input = EXAMPLES[self.index % len(EXAMPLES)][1]
+        set_chat_input(context.window_manager, EXAMPLES[self.index % len(EXAMPLES)][1])
         return {"FINISHED"}
 
 
@@ -690,10 +690,33 @@ CLASSES = (
 )
 
 
+# Text the plugin itself puts in the chat box (an example, a message NOLGIA
+# refused, the box emptied after a send) is never sent by the update below.
+_setting_chat_input = False
+
+
+def set_chat_input(wm, text):
+    """Fill or empty the chat box without sending it."""
+    global _setting_chat_input
+    _setting_chat_input = True
+    try:
+        wm.nolgia_chat_input = text
+    finally:
+        _setting_chat_input = False
+
+
 def _on_chat_input(wm, _context):
+    """Enter in the chat box sends it, like Send (the owner's Mac test,
+    2026-10-29). Blender confirms a text field on Enter (and when you click
+    away from it) and only then runs this update."""
     ctl = _ctl()
-    if ctl is not None:
-        ctl.chat.wake()
+    if ctl is None:
+        return
+    ctl.chat.wake()
+    if _setting_chat_input or not wm.nolgia_chat_input.strip() or ctl.chat_blocker() is not None:
+        return
+    if ctl.chat.send(wm.nolgia_chat_input):
+        set_chat_input(wm, "")
 
 
 def register():
@@ -701,7 +724,7 @@ def register():
         bpy.utils.register_class(cls)
     bpy.types.WindowManager.nolgia_chat_input = StringProperty(
         name="Message",
-        description="Ask NOLGIA Agent to make or change something in this Blender",
+        description="Ask NOLGIA Agent to make or change something in this Blender. Enter sends it",
         options={"SKIP_SAVE"},
         update=_on_chat_input,
     )
