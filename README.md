@@ -29,7 +29,7 @@ on, and it lists every command it runs.
 4. Click Sign in. Your browser opens a NOLGIA page; check that the code
    matches the one in Blender and approve it.
 5. Keep Connected on and tell NOLGIA Agent what to do in the box under
-   NOLGIA Agent, then click Send. Each command it runs here shows up in the
+   NOLGIA Agent, then press Enter (or click Send). Each command it runs here shows up in the
    Activity list. Click Pause (or turn Connected off) to stop at any time.
 
 ### The chat with NOLGIA Agent
@@ -37,8 +37,10 @@ on, and it lists every command it runs.
 The NOLGIA Agent part of the tab is a chat with your NOLGIA Agent, which
 works in this Blender through the plugin:
 
-- Type what you want in the box and click Send. Before your first message it
-  suggests a few things to try (a click puts one in the box).
+- Type what you want in the box and press Enter, or click Send. (Blender
+  also confirms a text box when you click away from it, so that sends too.)
+  Before your first message it suggests a few things to try (a click puts one
+  in the box to edit; it is not sent until you press Enter).
 - One message is one turn: while NOLGIA Agent works, the box waits and Stop
   ends the turn. What it does in Blender shows in Activity.
 - Each reply shows what its turn cost. The line under the box gives the rate
@@ -68,9 +70,13 @@ want to see it first.
 
 ## Tested on
 
-0.2.0 (the chat) was tested on Windows 11 with Blender 4.5.8 LTS, against the
-mock API and against NOLGIA itself. It has not been run on macOS yet. 0.1.1 was
-tested on Windows and macOS.
+- **0.2.1** (Enter sends; the plugin reports the computer's own name, on a Mac
+  the one in System Settings > General > About, and its operating system):
+  Windows 11 with Blender 4.5.8 LTS, against the mock API. On macOS it waits
+  for its re-test.
+- **0.2.0** (the chat): Windows 11 with Blender 4.5.8 LTS, and macOS 26.6.2
+  (Apple silicon) with Blender 5.2.2, against NOLGIA itself (October 29, 2026).
+- **0.1.1**: Windows and macOS.
 
 ## What your agent can do
 
@@ -133,8 +139,8 @@ with the zip attached as `nolgia-blender-<version>.zip`; the website links to
 that exact name.
 
 ```sh
-blender --command extension build --source-dir . --output-filepath dist/nolgia-blender-0.2.0.zip
-blender --command extension validate dist/nolgia-blender-0.2.0.zip
+blender --command extension build --source-dir . --output-filepath dist/nolgia-blender-0.2.1.zip
+blender --command extension validate dist/nolgia-blender-0.2.1.zip
 ```
 
 Run the mock API on its own:

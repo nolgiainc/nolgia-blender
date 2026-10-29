@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import datetime
+import json
+import os
 import random
+import tempfile
 import unittest
 
 import support  # noqa: F401
@@ -59,3 +62,36 @@ class Files(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ComputerName(unittest.TestCase):
+    # The owner's Mac test (2026-10-29): Photoshop said "louieknows's Mac",
+    # the other plugins "Louies-MacBook-Pro.local"; the Mac is "Louie's MacBook Pro".
+    def test_a_mac_names_its_computer_name(self):
+        self.assertEqual(util.computer_name("darwin", scutil=lambda: "Louie\u2019s MacBook Pro", node="Louies-MacBook-Pro.local"),
+                         "Louie\u2019s MacBook Pro")
+
+    def test_without_scutil_a_mac_falls_back_to_the_network_name(self):
+        self.assertEqual(util.computer_name("darwin", scutil=lambda: "", node="Louies-MacBook-Pro.local"), "Louies-MacBook-Pro")
+
+    def test_windows_names_its_computer_name(self):
+        self.assertEqual(util.computer_name("win32", scutil=lambda: "never asked", node="DESKTOP-ABC123"), "DESKTOP-ABC123")
+
+    def test_os_names(self):
+        self.assertEqual([util.os_name(p) for p in ("darwin", "win32", "linux", "freebsd13")], ["macos", "windows", "linux", ""])
+
+    def test_the_shared_data_folder(self):
+        self.assertEqual(util.nolgia_data_dir("win32", {"APPDATA": r"C:\Users\ada\AppData\Roaming"}, "C:\\Users\\ada"),
+                         os.path.join(r"C:\Users\ada\AppData\Roaming", "NOLGIA"))
+        self.assertEqual(util.nolgia_data_dir("darwin", {}, "/Users/ada"),
+                         os.path.join("/Users/ada", "Library", "Application Support", "NOLGIA"))
+
+    def test_the_name_is_kept_for_photoshop(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertTrue(util.remember_computer_name("Ada's MacBook Pro", "nolgia-blender 0.2.1", folder))
+            with open(os.path.join(folder, "computer.json"), encoding="utf-8") as handle:
+                data = json.load(handle)
+            self.assertEqual(data["name"], "Ada's MacBook Pro")
+            self.assertEqual(data["written_by"], "nolgia-blender 0.2.1")
+            self.assertTrue(util.remember_computer_name("Ada's MacBook Pro", "nolgia-blender 0.2.1", folder), "unchanged")
+            self.assertFalse(util.remember_computer_name("", "nolgia-blender 0.2.1", folder))

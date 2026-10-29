@@ -74,7 +74,8 @@ class DeviceLoginTest(unittest.TestCase):
     def test_pending_then_token(self):
         login, prompt, clock = self.run_login([oauth(400, "authorization_pending"), dict(TOKEN)])
         self.assertEqual(prompt.user_code, "ABCD-EFGH")
-        self.assertEqual(prompt.open_url, "https://nolgia.ai/device?user_code=ABCD-EFGH")
+        # The page names the app signing in (client=), never the CLI's words.
+        self.assertEqual(prompt.open_url, "https://nolgia.ai/device?user_code=ABCD-EFGH&client=blender")
         token = login.wait_for_token(prompt)
         self.assertEqual((token.access_token, token.email), ("nol_abc", "ada@nolgia.ai"))
         self.assertEqual(token.expires_at, clock.now + 2592000)

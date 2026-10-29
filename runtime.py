@@ -540,7 +540,9 @@ def _restore_chat_input(text):
     person typed something new meanwhile."""
     wm = getattr(bpy.context, "window_manager", None)
     if wm is not None and hasattr(wm, "nolgia_chat_input") and not wm.nolgia_chat_input:
-        wm.nolgia_chat_input = text
+        from . import ui
+
+        ui.set_chat_input(wm, text)
 
 
 def _redraw():
