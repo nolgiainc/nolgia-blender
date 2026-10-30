@@ -62,6 +62,14 @@ Settings in the NOLGIA tab (also in the add-on's preferences):
   well as the agent apps you run yourself.
 - **Ask before running code**: show every piece of Python NOLGIA wants to run
   and wait for you to click Approve or Deny.
+
+A request waits in the NOLGIA panel and opens a NOLGIA request window. Only a
+click answers it: Approve and Deny take a click 1 second after the request
+shows (in the panel they look greyed out until then), the mouse button has to
+go down and up on the button after that, and Return or any other key never
+answers (Return closes the window and the request keeps waiting). The
+Blender console logs every answer, and every click it ignored, with its
+request.
 - **Sign out**: disconnect and forget the sign in on this computer.
 
 Python that NOLGIA runs in Blender runs on your computer with your
@@ -70,6 +78,17 @@ want to see it first.
 
 ## Tested on
 
+- **0.2.2** (a request is answered only by a deliberate click, from the
+  owner's third Mac test, where a request in the Resolve plugin was approved
+  with nobody clicking): Windows 11 with Blender 4.5.8 LTS, in a real Blender
+  window driven by Blender's own event simulation (no input from the
+  computer's mouse or keyboard). 0.2.1 approved a click 0.3 s after the
+  request showed (in the window and in the panel), a press made before the
+  window opened and released on Run code (Blender's popups run a button on
+  a bare release), and Return in the window or over the panel's button.
+  0.2.2 approved none of these, nor a press 0.3 s after the request showed
+  and released at 1.5 s, and approved a click 1.5 s after it showed, in the
+  window and in the panel. On macOS it waits for its re-test.
 - **0.2.1** (Enter sends; the plugin reports the computer's own name, on a Mac
   the one in System Settings > General > About, and its operating system):
   Windows 11 with Blender 4.5.8 LTS, against the mock API. On macOS it waits
@@ -139,8 +158,8 @@ with the zip attached as `nolgia-blender-<version>.zip`; the website links to
 that exact name.
 
 ```sh
-blender --command extension build --source-dir . --output-filepath dist/nolgia-blender-0.2.1.zip
-blender --command extension validate dist/nolgia-blender-0.2.1.zip
+blender --command extension build --source-dir . --output-filepath dist/nolgia-blender-0.2.2.zip
+blender --command extension validate dist/nolgia-blender-0.2.2.zip
 ```
 
 Run the mock API on its own:
