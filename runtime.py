@@ -19,7 +19,7 @@ import webbrowser
 import bpy
 from bpy.app.handlers import persistent
 
-from . import ops
+from . import approval, ops
 from .core import PLUGIN_VERSION
 from .core.api import ApiClient, base_url_from_env
 from .core.auth import DeviceLogin, LoginCancelled, LoginError
@@ -75,6 +75,9 @@ class Controller:
         self._syncing = False
         self._last_snapshot = 0.0
         self._popup_shown = set()
+        self.arming = approval.Arming()
+        self._watching = {}  # window pointer -> the generation of its press watcher
+        self._watch_generation = 0
         self.clean_exit = True
         self.chat = AgentChat(self)
 
@@ -430,8 +433,10 @@ class Controller:
 
     def _on_approvals_changed(self):
         self.bump()
+        self.arming.keep_only({p.id for p in self.executor.approvals})
         if bpy.app.background:
             return
+        self.start_watchers()
         for pending in self.executor.approvals:
             if pending.id in self._popup_shown:
                 continue
@@ -444,6 +449,38 @@ class Controller:
                     bpy.ops.nolgia.review_request("INVOKE_DEFAULT", command_id=pending.id)
             except Exception as err:
                 log("Could not show the approval window (%s); use the NOLGIA panel." % err)
+
+    # ------------------------------------------------------- press watchers
+
+    def start_watchers(self, restart=None):
+        """Run a press watcher (approval.py) in every window while a request
+        waits; `restart` gets a new one in front of the popups it has open."""
+        if bpy.app.background or not self.executor.approvals:
+            return
+        wm = getattr(bpy.context, "window_manager", None)
+        for win in (wm.windows if wm is not None else []):
+            key = win.as_pointer()
+            if key in self._watching and (restart is None or key != restart.as_pointer()):
+                continue
+            self._watch_generation += 1
+            self._watching[key] = self._watch_generation
+            try:
+                with bpy.context.temp_override(window=win, screen=win.screen):
+                    bpy.ops.nolgia.watch_clicks("INVOKE_DEFAULT")
+            except Exception as err:
+                self._watching.pop(key, None)
+                log("Could not watch clicks in a window (%s); its requests cannot be answered there." % err)
+
+    def watcher_generation(self, win):
+        return self._watching.get(win.as_pointer())
+
+    def watcher_done(self, win, generation):
+        if self._watching.get(win.as_pointer()) == generation:
+            del self._watching[win.as_pointer()]
+
+    def forget_watchers(self):
+        """Loading a file ends every modal operator, the watchers too."""
+        self._watching.clear()
 
     # ------------------------------------------------------------ main thread
 
@@ -476,6 +513,11 @@ class Controller:
                 traceback.print_exc()
         if self.executor.pump():
             self.bump()
+        if self.executor.approvals:
+            if not bpy.app.background:
+                self.start_watchers()
+            if self.arming.newly_armed():
+                _redraw()
         restore = self.chat.take_restore()
         if restore:
             _restore_chat_input(restore)
@@ -587,6 +629,7 @@ def _startup():
 def _on_file_event(*_args):
     ops.mark_clean()
     if controller is not None:
+        controller.forget_watchers()
         controller.update_snapshot()
         if controller.worker is not None:
             controller.worker.request_heartbeat()

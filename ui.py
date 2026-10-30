@@ -124,16 +124,31 @@ def draw_status(layout, context, ctl):
         row.operator("nolgia.sign_in", icon="USER")
 
     for pending in list(ctl.executor.approvals):
+        ctl.arming.drawn("panel", pending.id)
         box = layout.box()
         box.label(text=pending.request.title, icon="QUESTION")
         for line in pending.request.lines[:6]:
             box.label(text=_clip(line))
         if len(pending.request.lines) > 6:
             box.operator("nolgia.review_request", text="Show all", icon="TEXT").command_id = pending.id
-        row = box.row(align=True)
-        approve = row.operator("nolgia.approve", text=pending.request.approve_label, icon="CHECKMARK")
-        approve.command_id = pending.id
-        row.operator("nolgia.deny", text="Deny", icon="CANCEL").command_id = pending.id
+        _answer_buttons(box, ctl, pending, "panel")
+
+
+def _answer_buttons(layout, ctl, pending, place):
+    """Approve and Deny for one request. They refuse (and log) a click until
+    approval.ARM_SECONDS have passed since it showed in this place
+    (approval.Arming.refusal). In the panel they look greyed out until then
+    and the panel redraws when they turn on; an open popup is never redrawn,
+    so in the window they look the same throughout."""
+    row = layout.row(align=True)
+    if place == "panel":
+        row.active = ctl.arming.armed(place, pending.id)
+    approve = row.operator("nolgia.approve", text=pending.request.approve_label, icon="CHECKMARK")
+    approve.command_id = pending.id
+    approve.place = place
+    deny = row.operator("nolgia.deny", text="Deny", icon="CANCEL")
+    deny.command_id = pending.id
+    deny.place = place
 
 
 def draw_settings(layout, context, ctl, prefs):
@@ -587,6 +602,31 @@ class NOLGIA_OT_pause(bpy.types.Operator):
         return {"FINISHED"}
 
 
+def _answer(op, event, approve):
+    """Approve or Deny clicked: answer only for a deliberate click (approval.py)."""
+    ctl = _ctl()
+    if ctl is None:
+        return {"CANCELLED"}
+    pending = next((p for p in ctl.executor.approvals if p.id == op.command_id), None)
+    label = (pending.request.approve_label if pending is not None else "Approve") if approve else "Deny"
+    why = ctl.arming.refusal(op.place, op.command_id, event.type, event.value, event.mouse_x, event.mouse_y)
+    if why is not None:
+        runtime.log("Ignored %s for request %s: %s." % (label, op.command_id, why))
+        return {"CANCELLED"}
+    answered = ctl.executor.approve(op.command_id) if approve else ctl.executor.deny(op.command_id)
+    runtime.log("The person clicked %s for request %s%s." % (
+        label, op.command_id, "" if answered else ", which was no longer waiting"))
+    ctl.arming.forget(op.command_id)
+    ctl.bump()
+    return {"FINISHED"}
+
+
+def _not_a_click(op, approve):
+    runtime.log("Ignored %s for request %s: it did not come from a click on its button." % (
+        "Approve" if approve else "Deny", op.command_id))
+    return {"CANCELLED"}
+
+
 class NOLGIA_OT_approve(bpy.types.Operator):
     bl_idname = "nolgia.approve"
     bl_label = "Approve"
@@ -594,11 +634,13 @@ class NOLGIA_OT_approve(bpy.types.Operator):
     bl_options = {"INTERNAL"}
 
     command_id: StringProperty(options={"HIDDEN", "SKIP_SAVE"})
+    place: StringProperty(default="panel", options={"HIDDEN", "SKIP_SAVE"})
+
+    def invoke(self, context, event):
+        return _answer(self, event, True)
 
     def execute(self, context):
-        _ctl().executor.approve(self.command_id)
-        _ctl().bump()
-        return {"FINISHED"}
+        return _not_a_click(self, True)
 
 
 class NOLGIA_OT_deny(bpy.types.Operator):
@@ -608,16 +650,48 @@ class NOLGIA_OT_deny(bpy.types.Operator):
     bl_options = {"INTERNAL"}
 
     command_id: StringProperty(options={"HIDDEN", "SKIP_SAVE"})
+    place: StringProperty(default="panel", options={"HIDDEN", "SKIP_SAVE"})
+
+    def invoke(self, context, event):
+        return _answer(self, event, False)
 
     def execute(self, context):
-        _ctl().executor.deny(self.command_id)
-        _ctl().bump()
-        return {"FINISHED"}
+        return _not_a_click(self, False)
+
+
+class NOLGIA_OT_watch_clicks(bpy.types.Operator):
+    """Notes each left mouse press in its window while a NOLGIA request
+    waits, and passes every event on (approval.py)."""
+
+    bl_idname = "nolgia.watch_clicks"
+    bl_label = "NOLGIA click watch"
+    bl_options = {"INTERNAL"}
+
+    def invoke(self, context, event):
+        ctl = _ctl()
+        if ctl is None or context.window is None:
+            return {"CANCELLED"}
+        self._window = context.window
+        self._generation = ctl.watcher_generation(context.window)
+        context.window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        ctl = _ctl()
+        if ctl is None:
+            return {"FINISHED", "PASS_THROUGH"}
+        if not ctl.executor.approvals or ctl.watcher_generation(self._window) != self._generation:
+            ctl.watcher_done(self._window, self._generation)
+            return {"FINISHED", "PASS_THROUGH"}
+        if event.type == "LEFTMOUSE" and event.value == "PRESS":
+            ctl.arming.pressed(event.mouse_x, event.mouse_y)
+        return {"PASS_THROUGH"}
 
 
 class NOLGIA_OT_review_request(bpy.types.Operator):
-    """Shows a waiting request. OK approves; closing the window leaves it
-    waiting in the NOLGIA panel."""
+    """Shows a waiting request with its own Approve and Deny (approval.py:
+    off for a second, a click only). Close, Return and Escape leave it
+    waiting in the NOLGIA panel; the window never approves by itself."""
 
     bl_idname = "nolgia.review_request"
     bl_label = "NOLGIA request"
@@ -636,13 +710,20 @@ class NOLGIA_OT_review_request(bpy.types.Operator):
         pending = self._pending()
         if pending is None:
             return {"CANCELLED"}
+        ctl = _ctl()
+        ctl.arming.show("window", pending.id)
         kwargs = {"width": 640}
         try:
-            return context.window_manager.invoke_props_dialog(
-                self, title=pending.request.title, confirm_text=pending.request.approve_label, **kwargs
+            shown = context.window_manager.invoke_props_dialog(
+                self, title=pending.request.title, confirm_text="Close", cancel_default=True, **kwargs
             )
-        except TypeError:  # Blender before 4.1 has no title/confirm_text
-            return context.window_manager.invoke_props_dialog(self, **kwargs)
+        except TypeError:  # Blender before 4.1 has no title, confirm_text or cancel_default
+            shown = context.window_manager.invoke_props_dialog(self, **kwargs)
+        # A press watcher in front of this window's handlers, or it would not
+        # see the presses inside it.
+        win = context.window
+        bpy.app.timers.register(lambda: (ctl.start_watchers(restart=win), None)[1], first_interval=0.05)
+        return shown
 
     def draw(self, context):
         pending = self._pending()
@@ -658,11 +739,16 @@ class NOLGIA_OT_review_request(bpy.types.Operator):
         if len(pending.request.lines) > MAX_CODE_LINES:
             col.label(text="... %d more lines" % (len(pending.request.lines) - MAX_CODE_LINES))
         layout.label(text="Code runs on this computer with your permissions.", icon="INFO")
-        layout.operator("nolgia.deny", text="Deny", icon="CANCEL").command_id = self.command_id
+        _answer_buttons(layout, _ctl(), pending, "window")
+        layout.separator()
+        try:
+            # Only Close at the bottom, the default for Return.
+            layout.template_popup_confirm("", text="", cancel_text="Close", cancel_default=True)
+        except (AttributeError, TypeError):
+            pass  # Blender without it: its OK button is Close (execute below)
 
     def execute(self, context):
-        _ctl().executor.approve(self.command_id)
-        _ctl().bump()
+        """The window's own confirm button: it closes and leaves the request waiting."""
         return {"FINISHED"}
 
 
@@ -687,6 +773,7 @@ CLASSES = (
     NOLGIA_OT_approve,
     NOLGIA_OT_deny,
     NOLGIA_OT_review_request,
+    NOLGIA_OT_watch_clicks,
 )
 
 

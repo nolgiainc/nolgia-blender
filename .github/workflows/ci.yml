@@ -54,5 +54,5 @@ jobs:
           import sys, zipfile
           top = sorted({n.split("/")[0] for n in zipfile.ZipFile(sys.argv[1]).namelist()})
           print("zip holds:", top)
-          assert top == ["LICENSE", "__init__.py", "blender_manifest.toml", "core", "ops.py", "runtime.py", "ui.py"], top
+          assert top == ["LICENSE", "__init__.py", "approval.py", "blender_manifest.toml", "core", "ops.py", "runtime.py", "ui.py"], top
           PY
