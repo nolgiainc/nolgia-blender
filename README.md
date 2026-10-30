@@ -78,6 +78,20 @@ want to see it first.
 
 ## Tested on
 
+- **0.2.3** (reconnecting, from the owner's fourth Mac test, where After
+  Effects lost its connection while macOS showed another Space and was
+  silent for 5 minutes; the Adobe and Photoshop plugins got the same change
+  in 0.2.6 and 0.2.5): the first network failure after a working connection
+  is tried again at once; after that, network failures wait at most 10 s
+  (NOLGIA's own 429 and 5xx still up to 60 s); a failed heartbeat's wait ends
+  as soon as a poll gets through; and a heartbeat that is due is also sent
+  each time a poll comes back, since a poll's answer is network input, which
+  wakes the app however slow its timers are (macOS App Nap slows an app it
+  does not show). Unit tests with a relay that breaks every connection or
+  refuses them for a while (after a 14 s outage: back within 3.5 s; 0.2.2 took
+  7.7 to 8.1 s, and up to 60 s after a long one), and Blender 4.5.8 LTS on
+  Windows 11 minimized behind that relay (results in the release notes). On
+  macOS it waits for its re-test.
 - **0.2.2** (a request is answered only by a deliberate click, from the
   owner's third Mac test, where a request in the Resolve plugin was approved
   with nobody clicking): Windows 11 with Blender 4.5.8 LTS, in a real Blender
@@ -158,8 +172,8 @@ with the zip attached as `nolgia-blender-<version>.zip`; the website links to
 that exact name.
 
 ```sh
-blender --command extension build --source-dir . --output-filepath dist/nolgia-blender-0.2.2.zip
-blender --command extension validate dist/nolgia-blender-0.2.2.zip
+blender --command extension build --source-dir . --output-filepath dist/nolgia-blender-0.2.3.zip
+blender --command extension validate dist/nolgia-blender-0.2.3.zip
 ```
 
 Run the mock API on its own:
