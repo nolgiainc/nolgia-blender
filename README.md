@@ -51,6 +51,9 @@ works in this Blender through the plugin:
   Blender, so NOLGIA Agent knows the work is in this window.
 - The chat needs Connected and Allow NOLGIA Agent on; the tab offers the one
   click that switches on whichever is off.
+- When work NOLGIA Agent started in the background finishes after its reply,
+  the chat shows one line, "Background work finished. NOLGIA is reporting
+  what it produced.", and the Agent's next reply says what it produced.
 - The tab shows the last three turns; the whole chat is on nolgia.ai. The
   sidebar scrolls (mouse wheel), and Settings and Activity fold away by their
   headers. Activity shows the newest six commands, or all of them.
@@ -78,6 +81,23 @@ want to see it first.
 
 ## Tested on
 
+- **0.2.4** (a save from NOLGIA Agent's own code no longer crashes Blender,
+  from the plugin demo of November 1, 2026, where Blender 4.5.15 crashed
+  straight after the Agent's `run` saved the file, in the same place as a
+  crash on October 6): Blender 4.2 to 4.5 let go of Python's lock while an
+  operator runs, and inside a context override they then use Python without
+  it whenever another thread holds it. 0.2.3 pushed its undo step inside such
+  an override while the heartbeat that the save asked for ran on the network
+  thread. Now the undo push opens no override, and the plugin's network and
+  chat threads wait (running no Python) while the Agent's code runs inside
+  one; a save or open from that code sends its heartbeat after the command.
+  The chat also shows work the Agent finished in the background as one line,
+  never that row's text (it had shown the server's shell commands). Windows 11
+  with Blender 4.5.15 LTS, with a window, against the mock API
+  ([`tools/repro_save_crash.py`](tools/repro_save_crash.py)): 0.2.3 crashed
+  on the first save from code (EXCEPTION_ACCESS_VIOLATION in python311.dll,
+  as in the demo); 0.2.4 ran 120 saves from code and closed normally. The
+  end-to-end test (32 checks) passes. On macOS it waits for its re-test.
 - **0.2.3** (reconnecting, from the owner's fourth Mac test, where After
   Effects lost its connection while macOS showed another Space and was
   silent for 5 minutes; the Adobe and Photoshop plugins got the same change
@@ -167,13 +187,23 @@ python3 tests/e2e_blender.py --blender /path/to/blender
 From WSL it works with a Windows `blender.exe` too (paths go through
 `wslpath`, variables through `WSLENV`).
 
+[`tools/repro_save_crash.py`](tools/repro_save_crash.py) runs a Blender with a
+window (an undo push needs one) against the mock API and sends `run` commands
+that save the file from code, the step that crashed Blender 4.5 with 0.2.3. It
+ignores your mouse and keyboard and never takes focus. Point `--source` at an
+older checkout to see the crash:
+
+```sh
+python3 tools/repro_save_crash.py --blender /path/to/blender --runs 80
+```
+
 Build the installable zip and check it. Releases are tagged `blender-v<version>`
 with the zip attached as `nolgia-blender-<version>.zip`; the website links to
 that exact name.
 
 ```sh
-blender --command extension build --source-dir . --output-filepath dist/nolgia-blender-0.2.3.zip
-blender --command extension validate dist/nolgia-blender-0.2.3.zip
+blender --command extension build --source-dir . --output-filepath dist/nolgia-blender-0.2.4.zip
+blender --command extension validate dist/nolgia-blender-0.2.4.zip
 ```
 
 Run the mock API on its own:

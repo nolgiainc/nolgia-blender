@@ -3,6 +3,7 @@
 Blender's main thread."""
 
 import socket
+import sys
 import threading
 import time
 import unittest
@@ -13,7 +14,7 @@ import support
 from core import PLUGIN_VERSION
 from core.api import ApiClient
 from core.commands import CAPABILITIES, ActivityLog
-from core.mainthread import MainThreadExecutor
+from core.mainthread import MainThreadExecutor, Quiet
 from core import util
 from core import worker as worker_module
 from core.worker import BridgeWorker, Status
@@ -30,7 +31,8 @@ def until(predicate, timeout=10.0, step=0.02):
 
 
 class Harness:
-    def __init__(self, server_url, token=support.TOKEN, run=None, heartbeat=0.2, prepare=None, finish=None):
+    def __init__(self, server_url, token=support.TOKEN, run=None, heartbeat=0.2, prepare=None, finish=None,
+                 quiet=None):
         self.activity = ActivityLog()
         self.main_ident = None
         self.executor = MainThreadExecutor(run=run or self.default_run, on_status=self.activity.update)
@@ -40,7 +42,7 @@ class Harness:
         self.worker = BridgeWorker(
             ApiClient(server_url, token), self.executor, self.activity, "inst-test", lambda: self.snapshot,
             prepare=prepare, finish=finish, on_auth_failed=self.auth_failed.append, log=self.log.append,
-            heartbeat_interval=heartbeat, machine_name="test-box",
+            heartbeat_interval=heartbeat, machine_name="test-box", quiet=quiet,
         )
         self._stop = threading.Event()
         self._pump = threading.Thread(target=self._loop, daemon=True)
@@ -141,6 +143,78 @@ class WorkerTest(unittest.TestCase):
         body = self.server.state.heartbeats[-1]["body"]
         self.assertEqual(body["document"], {"name": "shot.blend", "path": "/p/shot.blend"})
         self.assertFalse(body["allow_agent"])
+
+    def test_no_heartbeat_while_the_main_thread_holds_quiet(self):
+        # After the Agent's code saved the file, the heartbeat a save asks for
+        # ran Python on the network thread while Blender was still inside an
+        # operator in a context override: Blender 4.5 crashed (2026-11-01).
+        quiet = Quiet()
+        h = self.start(heartbeat=0.1, quiet=quiet)
+        until(lambda: len(self.server.state.heartbeats) >= 2)
+        quiet.hold()
+        try:
+            count = len(self.server.state.heartbeats)
+            h.worker.request_heartbeat()
+            time.sleep(0.8)
+            self.assertEqual(len(self.server.state.heartbeats), count, "a heartbeat went out during the hold")
+        finally:
+            quiet.release()
+        until(lambda: len(self.server.state.heartbeats) > count, timeout=3)
+
+    def test_a_long_hold_still_lets_a_heartbeat_out_after_the_limit(self):
+        quiet = Quiet()
+        with mock.patch.object(worker_module, "QUIET_HEARTBEAT_LIMIT", 0.5):
+            h = self.start(heartbeat=0.1, quiet=quiet)
+            quiet.hold()
+            try:
+                count = len(self.server.state.heartbeats)
+                h.worker.request_heartbeat()
+                until(lambda: len(self.server.state.heartbeats) > count, timeout=3)
+            finally:
+                quiet.release()
+
+    def test_the_poll_thread_runs_no_python_while_blender_runs_the_command(self):
+        # 0.2.3 woke every 0.5 s to look for a kill while the command ran.
+        events = {}
+
+        def tracer(frame, event, arg):
+            name = threading.current_thread().name
+            events[name] = events.get(name, 0) + 1
+            return tracer
+
+        running, release = threading.Event(), threading.Event()
+
+        def slow(ticket):
+            running.set()
+            release.wait(10)
+            return True, {"finished": True}, None
+
+        threading.settrace(tracer)
+        try:
+            h = self.start(run=slow, heartbeat=30)
+        finally:
+            threading.settrace(None)
+        cid = support.enqueue(self.server, "info")
+        self.assertTrue(running.wait(5))
+        time.sleep(0.3)  # the poll thread reaches its wait
+        before = events.get("nolgia-poll", 0)
+        time.sleep(1.5)
+        self.assertEqual(events.get("nolgia-poll", 0), before, "the poll thread ran Python during the command")
+        release.set()
+        self.assertEqual(support.wait_command(self.server, cid)["status"], "succeeded")
+        self.assertGreater(events.get("nolgia-poll", 0), before)
+
+    def test_kill_answers_a_command_blender_never_finishes(self):
+        never = threading.Event()
+        h = self.start(run=lambda t: (never.wait(30), (True, {}, None))[1])
+        cid = support.enqueue(self.server, "info")
+        until(lambda: h.worker.busy_with == cid)
+        h.worker.kill()
+        done = until(lambda: (lambda c: c if c["status"] != "running" else None)(
+            support.wait_command(self.server, cid, wait=1)), timeout=5)
+        self.assertEqual(done["status"], "failed")
+        self.assertEqual(done["error"], "Blender closed before this command finished.")
+        never.set()
 
     def test_command_round_trip(self):
         h = self.start()
