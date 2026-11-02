@@ -21,7 +21,7 @@ import mathutils
 from .core import util
 from .core.api import ApiError, NetworkError
 from .core.commands import CommandError
-from .core.mainthread import ApprovalRequest
+from .core.mainthread import ApprovalRequest, Quiet
 from .core.pyexec import run_python
 
 EEVEE_IDS = ("BLENDER_EEVEE_NEXT", "BLENDER_EEVEE")
@@ -36,6 +36,11 @@ PREVIEW_MAX_BYTES = 3_600_000
 PREVIEW_JPEG_QUALITIES = (90, 80, 65, 50)
 UPLOAD_TAGS = ["blender"]
 BLEND_NOTE = "Blender files stay on this computer; NOLGIA stores previews, renders and GLB models."
+
+# Held while a context override is open, so the plugin's network and chat
+# threads run no Python then (core/mainthread.py, Quiet, says why: without it
+# Blender 4.2 to 4.5 can crash in an operator run inside the override).
+QUIET = Quiet()
 
 
 # ---------------------------------------------------------------- context
@@ -73,9 +78,11 @@ def active_view_layer(scene):
 
 @contextlib.contextmanager
 def ui_context():
-    """Point operators at a window and 3D view when Blender has a window.
+    """Point operators at a window and its 3D view when Blender has a window.
 
-    A timer callback has no window, and many operators want one.
+    A timer callback has Blender's first window but no area, and some
+    operators want a 3D view. The plugin's own threads wait while the
+    override is open (QUIET).
     """
     win = None if bpy.app.background else active_window()
     if win is None:
@@ -93,16 +100,31 @@ def ui_context():
     except Exception:
         yield
         return
-    with override:
+    with QUIET.held_quiet(), override:
+        yield
+
+
+@contextlib.contextmanager
+def window_context(win):
+    """Operators for one window (the request window, the click watchers),
+    with the plugin's own threads waiting meanwhile (QUIET)."""
+    with QUIET.held_quiet(), bpy.context.temp_override(window=win, screen=win.screen):
         yield
 
 
 def push_undo(message):
+    """One Undo step for what a command changed.
+
+    Never inside a context override: there the undo push looks up the active
+    object through Python, and NOLGIA for Blender 0.2.3 crashed in exactly
+    that lookup after the Agent's code saved the file (2026-11-01; the same
+    place as 2026-10-06). The timer that runs commands already has Blender's
+    first window, which is all an undo push needs.
+    """
     if bpy.app.background:
         return
     try:
-        with ui_context():
-            bpy.ops.ed.undo_push(message=message)
+        bpy.ops.ed.undo_push(message=message)
     except Exception:
         pass
 
@@ -295,8 +317,9 @@ def do_run(args, prepared, command):
     if args.get("timeout_seconds"):
         timeout = min(timeout, args["timeout_seconds"])
     mark_changed()
-    with ui_context():
-        outcome = run_python(args["code"], namespace, timeout=timeout)
+    # The code runs inside the window and 3D view override (ui_context);
+    # the undo push comes after it has closed.
+    outcome = run_python(args["code"], namespace, timeout=timeout, context=ui_context)
     push_undo("NOLGIA: run code")
     if not outcome.ok:
         raise CommandError(outcome.error, result=outcome.result())

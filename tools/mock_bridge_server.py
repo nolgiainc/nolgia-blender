@@ -1217,6 +1217,8 @@ def agent_message_view(m):
             out[key] = m[key]
     if m.get("steering"):
         out["steering"] = True
+    if m.get("origin"):
+        out["origin"] = m["origin"]
     if m["role"] == "agent" and m["status"] == "pending" and m.get("queued"):
         out["queued"] = True
     if m["role"] == "agent" and m["status"] == "complete":
@@ -1494,6 +1496,28 @@ def mock_agent_reply(h):
             agent_settle(st, m, status=body.get("status") or "complete", content=body.get("content") or "",
                          **{k: body[k] for k in ("error", "error_code", "question") if k in body})
         return h._send(200, agent_message_view(m))
+
+
+@route("POST", r"/mock/agent/background")
+def mock_agent_background(h):
+    """Files a background result in a session the way POST
+    /agent/background-results does: a user row with origin "background"
+    whose text is the platform's prompt to the Agent (so it may carry raw
+    shell commands, as it did on 2026-11-01), steering when a turn is running,
+    else a new turn for the Agent to report it."""
+    body = h.json()
+    st = h.state
+    with st.cond:
+        session = st.agent_sessions.get(body.get("session_id") or "")
+        if session is None:
+            raise HttpError(404, "Not Found", "session not found")
+        running = agent_pending(st, session["id"])
+        row = agent_row(st, session["user_id"], session["id"], "user", body.get("content") or "",
+                        origin="background", steering=running is not None)
+        if running is None:
+            agent_row(st, session["user_id"], session["id"], "agent", "", user_message_id=row["id"])
+        st.cond.notify_all()
+        return h._send(200, agent_message_view(row))
 
 
 @route("GET", r"/mock/state")

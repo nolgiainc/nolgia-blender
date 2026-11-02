@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The `run` executor: result value, output capture, tracebacks, timeout."""
 
+import contextlib
 import json
 import math
 import sys
@@ -130,6 +131,40 @@ class RunPython(unittest.TestCase):
         for _ in range(100000):
             x += 1
         self.assertEqual(x, 100000)
+
+    def test_the_context_opens_after_the_timeout_thread_waits_and_closes_before_it_stops(self):
+        # Blender: the code runs in the window and 3D view override, where no
+        # other thread may run Python (mainthread.Quiet).
+        seen = {}
+
+        def timers():
+            return [t for t in threading.enumerate() if isinstance(t, threading.Timer)]
+
+        @contextlib.contextmanager
+        def context():
+            timer = timers()[-1]
+            frame = sys._current_frames()[timer.ident]
+            seen["open_in"] = frame.f_code.co_name
+            yield
+            seen["stopped_at_close"] = timer.finished.is_set()
+            seen["alive_at_close"] = timer.is_alive()
+
+        out = run_python("result = 7", {}, timeout=30, context=context)
+        self.assertTrue(out.ok, out.error)
+        self.assertEqual(out.value, 7)
+        self.assertEqual(seen["open_in"], "wait", "the timeout's thread was not waiting yet")
+        self.assertFalse(seen["stopped_at_close"])
+        self.assertTrue(seen["alive_at_close"])
+
+    def test_a_failure_inside_the_context_keeps_its_traceback(self):
+        @contextlib.contextmanager
+        def context():
+            yield
+
+        out = run_python("x = 1\nraise ValueError('nope')", {}, timeout=30, context=context)
+        self.assertFalse(out.ok)
+        self.assertIn("ValueError: nope", out.error)
+        self.assertIn("line 2", out.error)
 
     def test_runs_on_the_calling_thread(self):
         out = run_python("import threading\nresult = threading.get_ident()", {})

@@ -89,6 +89,24 @@ class Layout:
 
 states = []
 ui.draw_nolgia(Layout(), bpy.context); states.append('connected')
+# Background work the Agent finished after its reply: one plain line, never
+# the row's own text (the platform's prompt to the Agent, shell commands and all).
+chat = ctl.chat
+with chat._lock:
+    kept = (dict(chat.rows), chat.session_id, chat.loaded)
+    chat.session_id, chat.loaded = 'probe-session', True
+    chat._merge([{'id': 'bg-1', 'role': 'user', 'status': 'complete', 'origin': 'background',
+                  'session_id': 'probe-session', 'created_at': '2026-11-01T23:02:35Z',
+                  'content': 'Command: cd /opt/data/cache/scratch/bl && source mc.sh'}])
+try:
+    first = len(labels)
+    ui.draw_chat(Layout(), bpy.context, ctl); states.append('background work row')
+    drawn = ' '.join(labels[first:])
+    assert 'Background work finished.' in drawn, drawn
+    assert 'mc.sh' not in drawn and 'BACKGROUND WORK FINISHED' not in drawn, drawn
+finally:
+    with chat._lock:
+        chat.rows, chat.session_id, chat.loaded = kept
 ui.draw_nolgia(Layout(), bpy.context, in_prefs=True); states.append('preferences')
 cmd = Command({'id': 'probe', 'kind': 'run', 'caller': 'agent', 'args': {'code': 'x = 1\\n' * 10}})
 ctl.executor.approvals.append(PendingApproval(Ticket(cmd), ApprovalRequest('NOLGIA Agent wants to run Python in Blender', ['x = 1'] * 10, 'n/a')))
@@ -403,7 +421,7 @@ def main():
         def panel_draws():
             res = expect_ok(caller.command("run", {"language": "python", "code": UI_PROBE}))
             value = res["value"]
-            assert value["states"] == ["connected", "preferences", "approval", "signed out"], value
+            assert value["states"] == ["connected", "background work row", "preferences", "approval", "signed out"], value
             assert value["labels"] > 10 and value["dialog_has_title"], value
 
         checks.check("panel draws in every state", panel_draws)

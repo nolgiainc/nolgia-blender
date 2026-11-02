@@ -10,7 +10,9 @@ import support
 
 from core import AGENT_URL, BILLING_URL, COST_LINE
 from core.api import ApiClient
+from core.mainthread import Quiet
 from core.chat import (
+    BACKGROUND_NOTICE,
     MAX_CHARS,
     AgentChat,
     ChatStore,
@@ -102,8 +104,8 @@ class ChatTest(unittest.TestCase):
         return Link(ApiClient(self.server.base_url, token), instance_id, self.server.base_url, email,
                     ChatStore(self.store_path))
 
-    def chat(self, owner=None, link=None, threaded=False):
-        chat = AgentChat(owner or Owner(), threaded=threaded)
+    def chat(self, owner=None, link=None, threaded=False, quiet=None):
+        chat = AgentChat(owner or Owner(), threaded=threaded, quiet=quiet)
         self.chats.append(chat)
         chat.begin(link or self.link())
         return chat
@@ -336,6 +338,47 @@ class ChatTest(unittest.TestCase):
         ok = self.chat()
         self.assertFalse(ok.send("x" * (MAX_CHARS + 1)))
         self.assertRegex(ok.view()["notice"]["text"], "too long")
+
+    def test_background_work_shows_as_one_plain_line_never_its_commands(self):
+        # 2026-11-01: the panel showed "BACKGROUND WORK FINISHED" over the
+        # platform's prompt to the Agent, with the pod's shell commands in it.
+        chat = self.chat()
+        self.assertTrue(chat.send("Make this boombox a product turntable"))
+        chat.tick()
+        raw = ("A background process you started in this chat has finished, after your reply had already "
+               "ended.\n\nWhat it returned:\n\n[IMPORTANT: Background process proc_2a73e94f7632 exited "
+               "(exit code 1).\nCommand: cd /opt/data/cache/scratch/bl && source mc.sh\nmc nolgia_app_export "
+               "'{\"app\":\"blender\",\"format\":\"mp4\",\"name\":\"Boombox Turntable\"}']")
+        status, row = support.call(self.server, "POST", "/mock/agent/background",
+                                   {"session_id": chat.session_id, "content": raw}, token=None)
+        self.assertEqual(status, 200, row)
+        self.reply(content="The turntable is built; the render did not run.")
+        chat.tick()
+        view = chat.view()
+        background = [r for r in view["rows"] if r["background"]]
+        self.assertEqual(len(background), 1)
+        self.assertEqual(background[0]["text"], BACKGROUND_NOTICE)
+        shown = repr(view)
+        for leak in ("mc.sh", "/opt/data", "proc_2a73e94f7632", "IMPORTANT", "nolgia_app_export"):
+            self.assertNotIn(leak, shown)
+
+    def test_the_chat_thread_waits_while_the_main_thread_holds_quiet(self):
+        quiet = Quiet()
+        chat = self.chat(threaded=True, quiet=quiet)
+        deadline = time.time() + 10
+        while not chat.view()["loaded"] and time.time() < deadline:
+            time.sleep(0.05)
+        quiet.hold()
+        try:
+            self.assertTrue(chat.send("sent during an operator"))
+            time.sleep(0.6)
+            self.assertEqual(self.state()["agent_submits"], [], "the chat thread sent during the hold")
+        finally:
+            quiet.release()
+        deadline = time.time() + 10
+        while not self.state()["agent_submits"] and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(len(self.state()["agent_submits"]), 1)
 
     def test_the_chat_thread_reads_the_reply_by_itself(self):
         owner = Owner()

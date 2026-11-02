@@ -279,7 +279,13 @@ def draw_message(layout, context, row):
     box = layout.box()
     inset = 64
     if row["role"] == "user":
-        _faint(box).label(text="BACKGROUND WORK FINISHED" if row["background"] else "YOU")
+        if row["background"]:
+            # Filed by NOLGIA, not typed by the person: one line saying so
+            # (core/chat.py BACKGROUND_NOTICE); the reply after it says what
+            # the work produced.
+            _wrapped(_faint(box), row["text"], context, inset, icon="CHECKMARK")
+            return
+        _faint(box).label(text="YOU")
         _wrapped(box, row["text"], context, inset)
         return
     _faint(box).label(text="NOLGIA AGENT")

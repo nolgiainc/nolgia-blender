@@ -26,7 +26,7 @@ from .core.auth import DeviceLogin, LoginCancelled, LoginError
 from .core.chat import AgentChat, ChatStore, Link
 from .core.commands import ActivityLog, CommandError
 from .core.instance import lease_instance_id
-from .core.mainthread import MainThreadExecutor
+from .core.mainthread import MainThreadExecutor, Quiet
 from .core.worker import BridgeWorker, Status
 
 PACKAGE = __package__
@@ -79,7 +79,12 @@ class Controller:
         self._watching = {}  # window pointer -> the generation of its press watcher
         self._watch_generation = 0
         self.clean_exit = True
-        self.chat = AgentChat(self)
+        # A command is running on the main thread now (_run_ticket); a file
+        # saved or opened by it asks for a heartbeat only once it is done.
+        self._running = False
+        self._heartbeat_after = False
+        self.quiet = ops.QUIET
+        self.chat = AgentChat(self, quiet=self.quiet)
 
     # The chat calls these from its own thread.
 
@@ -209,6 +214,7 @@ class Controller:
             on_status=lambda state, text: self.bump(),
             on_auth_failed=lambda text: self.events.put(lambda: self._auth_failed(text)),
             log=log,
+            quiet=self.quiet,
         )
         self.worker.start()
         self.set_pref("connected", True)
@@ -416,6 +422,7 @@ class Controller:
         if runner is None:
             return False, None, "This plugin cannot do %s." % command.kind
         self.bump()
+        self._running = True
         try:
             return True, runner(command.args, ticket.prepared, command), None
         except CommandError as err:
@@ -423,7 +430,12 @@ class Controller:
         except Exception:
             return False, None, "Blender raised an error:\n" + traceback.format_exc()
         finally:
+            self._running = False
             self.update_snapshot()
+            if self._heartbeat_after:
+                self._heartbeat_after = False
+                if self.worker is not None:
+                    self.worker.request_heartbeat()
 
     def _prepare(self, command, api):
         """Worker thread: network work a command needs before Blender runs it."""
@@ -445,7 +457,7 @@ class Controller:
             if win is None:
                 continue
             try:
-                with bpy.context.temp_override(window=win, screen=win.screen):
+                with ops.window_context(win):
                     bpy.ops.nolgia.review_request("INVOKE_DEFAULT", command_id=pending.id)
             except Exception as err:
                 log("Could not show the approval window (%s); use the NOLGIA panel." % err)
@@ -465,7 +477,7 @@ class Controller:
             self._watch_generation += 1
             self._watching[key] = self._watch_generation
             try:
-                with bpy.context.temp_override(window=win, screen=win.screen):
+                with ops.window_context(win):
                     bpy.ops.nolgia.watch_clicks("INVOKE_DEFAULT")
             except Exception as err:
                 self._watching.pop(key, None)
@@ -481,6 +493,20 @@ class Controller:
     def forget_watchers(self):
         """Loading a file ends every modal operator, the watchers too."""
         self._watching.clear()
+
+    def file_event(self):
+        """A file was saved or opened (load_post, save_post)."""
+        self.forget_watchers()
+        if self._running:
+            # From a command's own code, while Blender is still inside the
+            # save or open operator: the heartbeat waits until the command is
+            # done (_run_ticket), so no network thread runs Python now (the
+            # crash of 2026-11-01 came right after such a save).
+            self._heartbeat_after = True
+            return
+        self.update_snapshot()
+        if self.worker is not None:
+            self.worker.request_heartbeat()
 
     # ------------------------------------------------------------ main thread
 
@@ -554,6 +580,7 @@ class Controller:
 
     def shutdown(self, wait=0.0):
         self.cancel_sign_in()
+        self.quiet.close()  # nothing waits on a hold from here on
         self.chat.close()
         worker = self.worker
         if worker is not None:
@@ -629,10 +656,7 @@ def _startup():
 def _on_file_event(*_args):
     ops.mark_clean()
     if controller is not None:
-        controller.forget_watchers()
-        controller.update_snapshot()
-        if controller.worker is not None:
-            controller.worker.request_heartbeat()
+        controller.file_event()
 
 
 def _on_exit():
@@ -642,6 +666,7 @@ def _on_exit():
 
 def register():
     global controller
+    ops.QUIET = Quiet()  # a fresh one each time the add-on is switched on
     controller = Controller()
     bpy.app.timers.register(_timer, first_interval=0.2, persistent=True)
     bpy.app.timers.register(_startup, first_interval=0.1, persistent=False)
