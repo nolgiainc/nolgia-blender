@@ -74,8 +74,14 @@ class FormatTest(unittest.TestCase):
     def test_turn_rate(self):
         models = [{"model": "a", "turn_credits": 10, "default": True},
                   {"model": "claude-opus-5-5", "turn_credits": 70, "default": False}]
-        self.assertEqual(turn_rate({"model": None}, models), 10)
-        self.assertEqual(turn_rate({"model": "claude-opus-5-5"}, models), 70)
+        self.assertEqual(turn_rate({"model": None}, models), {"rate": 10, "typical": None, "cap": None})
+        self.assertEqual(turn_rate({"model": "claude-opus-5-5"}, models), {"rate": 70, "typical": None, "cap": None})
+        published = [{"model": "claude-opus-5-5", "turn_credits": 70, "typical_turn_credits": 120,
+                      "turn_ceiling_credits": 200, "default": True}]
+        self.assertEqual(turn_rate({"model": None}, published), {"rate": 70, "typical": 120, "cap": 200})
+        below = [{"model": "a", "turn_credits": 70, "typical_turn_credits": 50, "turn_ceiling_credits": 200, "default": True}]
+        self.assertEqual(turn_rate({"model": None}, below), {"rate": 70, "typical": None, "cap": None},
+                         "a typical turn under the flat minimum is not shown")
         self.assertIsNone(turn_rate({"model": "retired-brain"}, models))
         self.assertIsNone(turn_rate(None, models))
 
@@ -314,14 +320,17 @@ class ChatTest(unittest.TestCase):
     def test_the_cost_line_names_this_accounts_own_turn_rate(self):
         chat = self.chat()
         self.assertEqual(chat.view()["cost_line"],
-                         "NOLGIA Agent works right here, each turn from 10 credits on your model. "
+                         "NOLGIA Agent works right here, about 10 credits a turn on your model, "
+                         "never more than 200 for its own work. "
                          "You can also use Claude, Cursor, Codex or another agent with NOLGIA connected.")
         chat.close()
         self.mock_agent(model="claude-opus-5-5")
         chat = self.chat()
-        self.assertIn("each turn from 70 credits on your model", chat.view()["cost_line"])
+        self.assertIn("about 120 credits a turn on your model, never more than 200 for its own work",
+                      chat.view()["cost_line"])
+        self.assertNotIn("without asking", chat.view()["cost_line"])
         chat.new_chat()
-        self.assertIn("from 70 credits", chat.view()["cost_line"], "New chat keeps it")
+        self.assertIn("about 120 credits a turn", chat.view()["cost_line"], "New chat keeps it")
         chat.close()
         self.mock_agent(models_error=True)
         chat = self.chat()

@@ -43,8 +43,11 @@ works in this Blender through the plugin:
   in the box to edit; it is not sent until you press Enter).
 - One message is one turn: while NOLGIA Agent works, the box waits and Stop
   ends the turn. What it does in Blender shows in Activity.
-- Each reply shows what its turn cost. The line under the box gives the rate
-  of your NOLGIA Agent's model ("each turn from 70 credits on your model").
+- Each reply shows what its turn cost. The line under the box gives what a
+  turn typically costs on your NOLGIA Agent's model and the most a turn's own
+  work is billed ("about 120 credits a turn on your model, never more than 200
+  for its own work" on Claude Opus 5.5). Anything the Agent makes, such as a
+  render on NOLGIA, is billed on its own.
 - The chat is the same chat as on [nolgia.ai/agent](https://nolgia.ai/agent)
   ("Open this chat on nolgia.ai"), named "Blender: " and your first words.
   This Blender remembers it; New chat starts another. It is pinned to this
@@ -81,6 +84,10 @@ want to see it first.
 
 ## Tested on
 
+- **0.2.5** (the cost line says what a turn typically costs on your model and
+  the cap on a turn's own work, from nolgia-api #1378, instead of the flat
+  minimum "each turn from 70 credits"): unit tests against the mock API; not
+  run in Blender, and not yet on macOS.
 - **0.2.4** (a save from NOLGIA Agent's own code no longer crashes Blender,
   from the plugin demo of November 1, 2026, where Blender 4.5.15 crashed
   straight after the Agent's `run` saved the file, in the same place as a
@@ -202,8 +209,8 @@ with the zip attached as `nolgia-blender-<version>.zip`; the website links to
 that exact name.
 
 ```sh
-blender --command extension build --source-dir . --output-filepath dist/nolgia-blender-0.2.4.zip
-blender --command extension validate dist/nolgia-blender-0.2.4.zip
+blender --command extension build --source-dir . --output-filepath dist/nolgia-blender-0.2.5.zip
+blender --command extension validate dist/nolgia-blender-0.2.5.zip
 ```
 
 Run the mock API on its own:

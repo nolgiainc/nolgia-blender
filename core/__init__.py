@@ -6,7 +6,7 @@ Nothing in this package imports bpy, so it runs (and is tested) with a plain
 Python interpreter. The Blender side lives one level up.
 """
 
-PLUGIN_VERSION = "0.2.4"
+PLUGIN_VERSION = "0.2.5"
 APP = "blender"
 DEFAULT_API_URL = "https://api.nolgia.ai/v1"
 DEVICE_CLIENT_ID = "nolgia-blender"
@@ -16,12 +16,23 @@ DEVICE_SCOPE = "bridge assets:read assets:write"
 AGENT_URL = "https://nolgia.ai/agent"
 BILLING_URL = "https://nolgia.ai/billing"
 
-# The line under the chat box: NOLGIA Agent first, at the person's own rate
-# when NOLGIA tells it (GET /agent/models for the Agent's brain), then the
-# agents people already know.
+# The line under the chat box: NOLGIA Agent first, with what a turn typically
+# costs on the person's own model and the most a turn's own work is billed,
+# when NOLGIA tells it (GET /agent/models for the Agent's brain:
+# typical_turn_credits and turn_ceiling_credits); the flat minimum when the
+# API publishes only that; then the agents people already know.
 OTHER_AGENTS = "Claude, Cursor, Codex or another agent"
 COST_LINE_RATE = (
     "NOLGIA Agent works right here, each turn from {credits} credits on your model. "
     "You can also use " + OTHER_AGENTS + " with NOLGIA connected."
 )
 COST_LINE = COST_LINE_RATE.replace("{credits}", "10")
+COST_LINE_TYPICAL = (
+    "NOLGIA Agent works right here, about {typical} credits a turn on your model. "
+    "You can also use " + OTHER_AGENTS + " with NOLGIA connected."
+)
+COST_LINE_TYPICAL_CAP = (
+    "NOLGIA Agent works right here, about {typical} credits a turn on your model, "
+    "never more than {cap} for its own work. "
+    "You can also use " + OTHER_AGENTS + " with NOLGIA connected."
+)
